@@ -1,0 +1,877 @@
+#!/bin/bash
+
+# Browser Games Manager
+# Version: 2.0.0
+# Interactive CLI tool for managing browser games
+
+# Configuration
+GAMES_DIR="${BROWSER_GAMES_DIR:-$HOME/.browser-games}"
+DATA_DIR="$GAMES_DIR/data"
+GAMES_LIST="$GAMES_DIR/games.json"
+CONFIG_FILE="$GAMES_DIR/config.json"
+SERVER_PORT=8080
+REPO_URL="https://github.com/Browser-gamez"
+LOG_FILE="$GAMES_DIR/game-manager.log"
+HISTORY_FILE="$GAMES_DIR/history"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Global variables
+SESSION_STARTED=false
+CURRENT_GAME=""
+
+# Initialize logging
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+# Print with colors
+print_error() { echo -e "${RED}✗ $*${NC}"; }
+print_success() { echo -e "${GREEN}✓ $*${NC}"; }
+print_info() { echo -e "${BLUE}➜ $*${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $*${NC}"; }
+print_debug() { echo -e "${CYAN}🔧 $*${NC}"; }
+
+# Check dependencies
+check_dependencies() {
+    local missing=()
+    
+    for cmd in curl jq python3; do
+        if ! command -v $cmd &> /dev/null; then
+            missing+=($cmd)
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        print_error "Missing dependencies: ${missing[*]}"
+        print_info "Please install:"
+        for dep in "${missing[@]}"; do
+            case $dep in
+                jq) echo "  - jq: sudo apt install jq (Ubuntu) or brew install jq (macOS)" ;;
+                curl) echo "  - curl: sudo apt install curl (Ubuntu) or brew install curl (macOS)" ;;
+                python3) echo "  - python3: sudo apt install python3 (Ubuntu) or brew install python (macOS)" ;;
+            esac
+        done
+        return 1
+    fi
+    return 0
+}
+
+# Initialize system
+init_system() {
+    print_info "Initializing Browser Games System..."
+    
+    mkdir -p "$GAMES_DIR" "$DATA_DIR"
+    
+    # Create initial config
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" << EOF
+{
+    "version": "2.0.0",
+    "server_port": 8080,
+    "default_repo": "https://github.com/Browser-gamez",
+    "auto_update": true,
+    "theme": "default"
+}
+EOF
+    fi
+    
+    # Create games list
+    if [ ! -f "$GAMES_LIST" ]; then
+        echo '{"installed": [], "available_cache": []}' > "$GAMES_LIST"
+    fi
+    
+    # Create history file
+    touch "$HISTORY_FILE"
+    
+    # Create sample game if none exist
+    if [ ! -d "$GAMES_DIR/sample" ] && [ ! -f "$GAMES_LIST" ]; then
+        create_sample_game
+    fi
+    
+    print_success "System initialized!"
+    print_info "Games directory: $GAMES_DIR"
+    print_info "Data directory: $DATA_DIR"
+}
+
+# Create a sample game
+create_sample_game() {
+    local sample_dir="$GAMES_DIR/sample-game"
+    mkdir -p "$sample_dir"
+    
+    cat > "$sample_dir/index.html" << EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sample Game</title>
+    <style>
+        body { 
+            margin: 0; 
+            padding: 20px; 
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+        }
+        canvas { 
+            border: 3px solid white;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.1);
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 Sample Browser Game</h1>
+        <p>This is a sample game installed by Browser Games Manager</p>
+        <canvas id="gameCanvas" width="600" height="400"></canvas>
+        <p>Score: <span id="score">0</span></p>
+        <p>Use arrow keys to move</p>
+    </div>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let score = 0;
+        let player = { x: 300, y: 200, size: 20, speed: 5 };
+        let target = { x: 100, y: 100, size: 15 };
+        
+        function drawPlayer() {
+            ctx.fillStyle = '#4CAF50';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        function drawTarget() {
+            ctx.fillStyle = '#FF5722';
+            ctx.beginPath();
+            ctx.arc(target.x, target.y, target.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        function checkCollision() {
+            const dx = player.x - target.x;
+            const dy = player.y - target.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < player.size + target.size) {
+                score++;
+                document.getElementById('score').textContent = score;
+                target.x = Math.random() * (canvas.width - 30) + 15;
+                target.y = Math.random() * (canvas.height - 30) + 15;
+                
+                // Save score to localStorage
+                localStorage.setItem('sample_game_score', score);
+            }
+        }
+        
+        function update() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPlayer();
+            drawTarget();
+            checkCollision();
+            requestAnimationFrame(update);
+        }
+        
+        // Load saved score
+        const savedScore = localStorage.getItem('sample_game_score');
+        if (savedScore) {
+            score = parseInt(savedScore);
+            document.getElementById('score').textContent = score;
+        }
+        
+        // Keyboard controls
+        const keys = {};
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+        
+        function handleInput() {
+            if (keys['ArrowUp'] || keys['w']) player.y -= player.speed;
+            if (keys['ArrowDown'] || keys['s']) player.y += player.speed;
+            if (keys['ArrowLeft'] || keys['a']) player.x -= player.speed;
+            if (keys['ArrowRight'] || keys['d']) player.x += player.speed;
+            
+            // Keep player in bounds
+            player.x = Math.max(player.size, Math.min(canvas.width - player.size, player.x));
+            player.y = Math.max(player.size, Math.min(canvas.height - player.size, player.y));
+        }
+        
+        function gameLoop() {
+            handleInput();
+            update();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        gameLoop();
+    </script>
+</body>
+</html>
+EOF
+    
+    cat > "$sample_dir/credits.game" << EOF
+{
+    "name": "Sample Game",
+    "author": "Browser Games Manager",
+    "version": "1.0.0",
+    "description": "A sample browser game demonstrating the system",
+    "license": "MIT",
+    "created": "2024",
+    "website": "https://github.com/Browser-gamez"
+}
+EOF
+    
+    # Add to installed games
+    local game_info=$(jq -n \
+        --arg name "sample-game" \
+        --arg path "$sample_dir" \
+        --arg date "$(date)" \
+        --arg version "1.0.0" \
+        '{"name": $name, "path": $path, "installed_date": $date, "version": $version}')
+    
+    jq --argjson game "$game_info" '.installed += [$game]' "$GAMES_LIST" > /tmp/games.json && mv /tmp/games.json "$GAMES_LIST"
+    
+    print_success "Sample game created! Run 'start sample-game' to play it."
+}
+
+# Interactive shell
+start_shell() {
+    SESSION_STARTED=true
+    
+    # Clear screen
+    clear
+    
+    # Show banner
+    cat << "EOF"
+    
+╔═══════════════════════════════════════════════════════╗
+║        🎮 BROWSER GAMES MANAGER v2.0.0 🎮            ║
+║       Type 'help' for commands, 'exit' to quit       ║
+╚═══════════════════════════════════════════════════════╝
+
+EOF
+    
+    # Load history
+    history -r "$HISTORY_FILE" 2>/dev/null
+    
+    # Main shell loop
+    while true; do
+        # Show prompt
+        if [ -n "$CURRENT_GAME" ]; then
+            echo -ne "${CYAN}[$CURRENT_GAME]${NC} "
+        fi
+        echo -ne "${GREEN}browser-games>${NC} "
+        
+        # Read command
+        read -e -p "" cmd
+        history -s "$cmd"
+        history -w "$HISTORY_FILE"
+        
+        # Parse command
+        read -r cmd_name args <<< "$cmd"
+        
+        case $cmd_name in
+            help|?)
+                show_help
+                ;;
+            exit|quit)
+                echo "Goodbye! 🎮"
+                break
+                ;;
+            clear)
+                clear
+                ;;
+            list|ls)
+                list_games "$args"
+                ;;
+            search)
+                search_games "$args"
+                ;;
+            install)
+                install_game "$args"
+                ;;
+            start)
+                start_game "$args"
+                ;;
+            stop)
+                stop_game "$args"
+                ;;
+            remove|uninstall|rm)
+                remove_game "$args"
+                ;;
+            credits)
+                show_credits "$args"
+                ;;
+            config)
+                manage_config "$args"
+                ;;
+            update)
+                update_games_list
+                ;;
+            backup)
+                backup_game "$args"
+                ;;
+            restore)
+                restore_game "$args"
+                ;;
+            shell)
+                print_info "You're already in the shell!"
+                ;;
+            "")
+                continue
+                ;;
+            *)
+                # Try to execute as external command
+                if command -v "$cmd_name" &> /dev/null; then
+                    eval "$cmd"
+                else
+                    print_error "Unknown command: $cmd_name"
+                    print_info "Type 'help' for available commands"
+                fi
+                ;;
+        esac
+    done
+}
+
+# Show help
+show_help() {
+    cat << "EOF"
+
+📖 AVAILABLE COMMANDS:
+
+  Core Commands:
+    help                    Show this help message
+    exit, quit             Exit the shell
+    clear                  Clear the screen
+    
+  Game Management:
+    list [filter]          List installed games (optional filter)
+    search <query>         Search for games in repository
+    install <game-name>    Install a game
+    remove <game-name>     Remove/uninstall a game
+    update                 Update games list from repository
+    
+  Game Operations:
+    start <game-name>      Start a game server
+    stop <game-name>       Stop running game server
+    credits <game-name>    Show game credits
+    
+  Data Management:
+    backup <game-name>     Backup game data
+    restore <file> <game>  Restore game data from backup
+    config                 Manage configuration
+    
+  System:
+    shell                  Start interactive shell (you're here!)
+
+📝 EXAMPLES:
+  list                    # List all installed games
+  search puzzle          # Search for puzzle games
+  install snake-game     # Install a game
+  start snake-game       # Start playing a game
+  credits snake-game     # Show game credits
+
+EOF
+}
+
+# List games
+list_games() {
+    local filter="$1"
+    
+    print_info "Installed Games:"
+    echo "┌─────────────────────────────────────────────────────┐"
+    
+    local games=$(jq -r '.installed[] | "\(.name)|\(.installed_date)|\(.version // "1.0.0")"' "$GAMES_LIST" 2>/dev/null)
+    
+    if [ -z "$games" ]; then
+        echo "│ No games installed                                     │"
+        echo "│ Run 'install sample-game' to get started!              │"
+    else
+        IFS=$'\n'
+        local count=0
+        for game in $games; do
+            local name=$(echo "$game" | cut -d'|' -f1)
+            local date=$(echo "$game" | cut -d'|' -f2)
+            local version=$(echo "$game" | cut -d'|' -f3)
+            
+            if [ -n "$filter" ] && [[ ! "$name" =~ $filter ]]; then
+                continue
+            fi
+            
+            printf "│ %-20s v%-6s %-20s │\n" "$name" "$version" "$(echo "$date" | cut -d' ' -f1)"
+            ((count++))
+        done
+        
+        if [ $count -eq 0 ] && [ -n "$filter" ]; then
+            echo "│ No games matching filter: $filter                 │"
+        fi
+    fi
+    
+    echo "└─────────────────────────────────────────────────────┘"
+    print_info "Total: $count game(s) installed"
+}
+
+# Search for games
+search_games() {
+    local query="$1"
+    
+    if [ -z "$query" ]; then
+        print_error "Please provide a search query"
+        print_info "Usage: search <game-name>"
+        return 1
+    fi
+    
+    print_info "Searching for '$query'..."
+    
+    # Try GitHub API
+    local results
+    if results=$(curl -s "https://api.github.com/search/repositories?q=org:Browser-gamez+$query" 2>/dev/null); then
+        local count=$(echo "$results" | jq '.total_count // 0')
+        
+        if [ "$count" -gt 0 ]; then
+            print_success "Found $count result(s):"
+            echo "┌─────────────────────────────────────────────────────┐"
+            echo "$results" | jq -r '.items[] | "│ \(.name) - \(.description // "No description")"'
+            echo "└─────────────────────────────────────────────────────┘"
+        else
+            print_warning "No games found matching '$query'"
+            print_info "Try: install sample-game (for a demo)"
+        fi
+    else
+        print_error "Failed to search. Check internet connection."
+    fi
+}
+
+# Install game
+install_game() {
+    local game_name="$1"
+    
+    if [ -z "$game_name" ]; then
+        print_error "Please specify a game name"
+        print_info "Usage: install <game-name>"
+        print_info "Example: install sample-game"
+        return 1
+    fi
+    
+    # Check if already installed
+    if jq -e --arg name "$game_name" '.installed[] | select(.name == $name)' "$GAMES_LIST" > /dev/null 2>&1; then
+        print_warning "Game '$game_name' is already installed"
+        print_info "Use 'remove $game_name' first to reinstall"
+        return 1
+    fi
+    
+    print_info "Installing '$game_name'..."
+    
+    local game_dir="$GAMES_DIR/$game_name"
+    mkdir -p "$game_dir"
+    
+    # Download from GitHub
+    print_debug "Downloading from GitHub..."
+    
+    # Try different URL patterns
+    local download_urls=(
+        "$REPO_URL/$game_name/archive/refs/heads/main.zip"
+        "$REPO_URL/$game_name/archive/refs/heads/master.zip"
+        "$REPO_URL/$game_name/archive/main.zip"
+    )
+    
+    local downloaded=false
+    for url in "${download_urls[@]}"; do
+        if curl -L -f -o "$game_dir/$game_name.zip" "$url" 2>/dev/null; then
+            downloaded=true
+            break
+        fi
+    done
+    
+    if [ "$downloaded" = false ]; then
+        print_error "Failed to download '$game_name'"
+        print_info "Make sure the game exists in the repository"
+        rm -rf "$game_dir"
+        return 1
+    fi
+    
+    # Extract and process
+    unzip -q "$game_dir/$game_name.zip" -d "$game_dir" 2>/dev/null
+    rm "$game_dir/$game_name.zip"
+    
+    # Find extracted folder
+    local extracted_dir=$(find "$game_dir" -maxdepth 1 -type d -name "*$game_name*" | head -1)
+    if [ -n "$extracted_dir" ] && [ "$extracted_dir" != "$game_dir" ]; then
+        mv "$extracted_dir"/* "$game_dir"/ 2>/dev/null
+        rm -rf "$extracted_dir"
+    fi
+    
+    # Check for required files
+    local html_file=$(find "$game_dir" -name "*.html" -o -name "*.htm" | head -1)
+    if [ -z "$html_file" ]; then
+        print_error "No HTML file found in the game!"
+        rm -rf "$game_dir"
+        return 1
+    fi
+    
+    # Copy main HTML file to index.html
+    cp "$html_file" "$game_dir/index.html" 2>/dev/null
+    
+    # Check/create credits file
+    if [ ! -f "$game_dir/credits.game" ]; then
+        print_warning "No credits.game file found. Creating default..."
+        cat > "$game_dir/credits.game" << EOF
+{
+    "name": "$game_name",
+    "author": "Unknown",
+    "version": "1.0.0",
+    "description": "Browser game from $REPO_URL",
+    "installed_by": "$USER",
+    "install_date": "$(date)"
+}
+EOF
+    fi
+    
+    # Create data directory
+    mkdir -p "$DATA_DIR/$game_name"
+    
+    # Update games list
+    local game_info=$(jq -n \
+        --arg name "$game_name" \
+        --arg path "$game_dir" \
+        --arg date "$(date '+%Y-%m-%d %H:%M:%S')" \
+        --arg version "1.0.0" \
+        '{"name": $name, "path": $path, "installed_date": $date, "version": $version}')
+    
+    jq --argjson game "$game_info" '.installed += [$game]' "$GAMES_LIST" > /tmp/games.json && mv /tmp/games.json "$GAMES_LIST"
+    
+    print_success "Game '$game_name' installed successfully!"
+    print_info "Location: $game_dir"
+    
+    # Show credits
+    show_credits "$game_name"
+}
+
+# Start game server
+start_game() {
+    local game_name="$1"
+    
+    if [ -z "$game_name" ]; then
+        print_error "Please specify a game name"
+        print_info "Usage: start <game-name>"
+        return 1
+    fi
+    
+    local game_dir="$GAMES_DIR/$game_name"
+    
+    if [ ! -d "$game_dir" ]; then
+        print_error "Game '$game_name' is not installed"
+        print_info "Use 'install $game_name' first"
+        return 1
+    fi
+    
+    if [ ! -f "$game_dir/index.html" ]; then
+        print_error "Game '$game_name' is corrupted (missing index.html)"
+        return 1
+    fi
+    
+    print_info "Starting '$game_name'..."
+    
+    # Get available port
+    local port=$SERVER_PORT
+    while lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; do
+        ((port++))
+    done
+    
+    # Get IP address
+    local ip_address
+    if command -v ip >/dev/null; then
+        ip_address=$(ip route get 1 | awk '{print $7; exit}')
+    else
+        ip_address="localhost"
+    fi
+    
+    CURRENT_GAME="$game_name"
+    
+    cat << EOF
+
+🎮 GAME STARTED! 🎮
+
+Game: $game_name
+Local URL:  http://localhost:$port
+Network URL: http://$ip_address:$port
+
+📱 Open in browser:
+  - On this computer: http://localhost:$port
+  - On phone/other: http://$ip_address:$port
+
+Press Ctrl+C to stop the server
+
+EOF
+    
+    # Start server
+    cd "$game_dir"
+    python3 -m http.server "$port"
+    
+    CURRENT_GAME=""
+}
+
+# Show credits
+show_credits() {
+    local game_name="$1"
+    
+    if [ -z "$game_name" ]; then
+        print_error "Please specify a game name"
+        print_info "Usage: credits <game-name>"
+        return 1
+    fi
+    
+    local game_dir="$GAMES_DIR/$game_name"
+    local credits_file="$game_dir/credits.game"
+    
+    if [ ! -d "$game_dir" ]; then
+        print_error "Game '$game_name' is not installed"
+        return 1
+    fi
+    
+    if [ ! -f "$credits_file" ]; then
+        print_warning "No credits file found for '$game_name'"
+        return 1
+    fi
+    
+    print_info "Credits for '$game_name':"
+    echo "┌─────────────────────────────────────────────────────┐"
+    
+    if jq -e . "$credits_file" >/dev/null 2>&1; then
+        jq -r 'to_entries[] | "│ \(.key): \(.value)"' "$credits_file"
+    else
+        # Plain text format
+        while IFS= read -r line; do
+            echo "│ $line"
+        done < "$credits_file"
+    fi
+    
+    echo "└─────────────────────────────────────────────────────┘"
+}
+
+# Remove game
+remove_game() {
+    local game_name="$1"
+    
+    if [ -z "$game_name" ]; then
+        print_error "Please specify a game name"
+        print_info "Usage: remove <game-name>"
+        return 1
+    fi
+    
+    if [ "$game_name" = "sample-game" ]; then
+        print_warning "Sample game is protected. Use 'rm -rf' manually if needed."
+        return 1
+    fi
+    
+    local game_dir="$GAMES_DIR/$game_name"
+    
+    if [ ! -d "$game_dir" ]; then
+        print_error "Game '$game_name' is not installed"
+        return 1
+    fi
+    
+    print_warning "Are you sure you want to remove '$game_name'? (y/N)"
+    read -r confirm
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "Removing '$game_name'..."
+        rm -rf "$game_dir"
+        rm -rf "$DATA_DIR/$game_name"
+        
+        # Remove from games list
+        jq --arg name "$game_name" 'del(.installed[] | select(.name == $name))' "$GAMES_LIST" > /tmp/games.json && mv /tmp/games.json "$GAMES_LIST"
+        
+        print_success "Game '$game_name' removed successfully!"
+    else
+        print_info "Removal cancelled"
+    fi
+}
+
+# Update games list
+update_games_list() {
+    print_info "Updating games list from repository..."
+    
+    # Fetch latest list
+    if games=$(curl -s "https://api.github.com/orgs/Browser-gamez/repos" 2>/dev/null); then
+        echo "$games" > "$GAMES_DIR/available.json"
+        print_success "Games list updated!"
+    else
+        print_error "Failed to update games list"
+    fi
+}
+
+# Backup game data
+backup_game() {
+    local game_name="$1"
+    
+    if [ -z "$game_name" ]; then
+        print_error "Please specify a game name"
+        return 1
+    fi
+    
+    local backup_dir="$GAMES_DIR/backups"
+    mkdir -p "$backup_dir"
+    
+    local backup_file="$backup_dir/$game_name-$(date +%Y%m%d-%H%M%S).tar.gz"
+    
+    if [ -d "$DATA_DIR/$game_name" ]; then
+        tar -czf "$backup_file" -C "$DATA_DIR" "$game_name"
+        print_success "Backup created: $backup_file"
+    else
+        print_warning "No data found for '$game_name'"
+    fi
+}
+
+# Restore game data
+restore_game() {
+    local backup_file="$1"
+    local game_name="$2"
+    
+    if [ -z "$backup_file" ] || [ -z "$game_name" ]; then
+        print_error "Usage: restore <backup-file> <game-name>"
+        return 1
+    fi
+    
+    if [ ! -f "$backup_file" ]; then
+        print_error "Backup file not found: $backup_file"
+        return 1
+    fi
+    
+    print_info "Restoring data for '$game_name'..."
+    tar -xzf "$backup_file" -C "$DATA_DIR"
+    print_success "Data restored for '$game_name'"
+}
+
+# Manage config
+manage_config() {
+    local action="$1"
+    
+    case $action in
+        show)
+            print_info "Current configuration:"
+            jq . "$CONFIG_FILE" 2>/dev/null || echo "{}"
+            ;;
+        edit)
+            "${EDITOR:-nano}" "$CONFIG_FILE"
+            ;;
+        "")
+            print_info "Configuration commands:"
+            echo "  config show    - Show current config"
+            echo "  config edit    - Edit config file"
+            ;;
+        *)
+            print_error "Unknown config action: $action"
+            ;;
+    esac
+}
+
+# Stop game (placeholder - would need PID tracking)
+stop_game() {
+    print_info "Stopping game servers is not yet implemented"
+    print_info "Use Ctrl+C in the game server terminal instead"
+}
+
+# Main function
+main() {
+    # Check if we're in interactive mode
+    if [ "$1" = "shell" ] || ([ $# -eq 0 ] && [ -t 0 ]); then
+        # Interactive mode
+        if ! check_dependencies; then
+            exit 1
+        fi
+        init_system
+        start_shell
+    else
+        # Command mode
+        case "$1" in
+            init)
+                check_dependencies
+                init_system
+                ;;
+            install)
+                check_dependencies
+                init_system
+                install_game "$2"
+                ;;
+            start)
+                check_dependencies
+                init_system
+                start_game "$2"
+                ;;
+            list)
+                check_dependencies
+                init_system
+                list_games "$2"
+                ;;
+            help|--help|-h)
+                cat << "EOF"
+Browser Games Manager v2.0.0
+
+Usage:
+  browser-games [command] [options]
+
+Commands:
+  shell              Start interactive shell (default)
+  init               Initialize system
+  install <game>     Install a game
+  start <game>       Start game server
+  list [filter]      List installed games
+  help               Show this help
+
+Interactive Shell:
+  Just run 'browser-games' to start the interactive shell
+
+Examples:
+  browser-games                     # Start interactive shell
+  browser-games install sample-game # Install a game
+  browser-games start sample-game   # Start a game
+  browser-games list                # List games
+
+Repository: https://github.com/Browser-gamez
+EOF
+                ;;
+            *)
+                # Start shell with command
+                if ! check_dependencies; then
+                    exit 1
+                fi
+                init_system
+                
+                if [ $# -gt 0 ]; then
+                    # Execute single command
+                    case "$1" in
+                        search) search_games "$2" ;;
+                        credits) show_credits "$2" ;;
+                        remove|rm|uninstall) remove_game "$2" ;;
+                        update) update_games_list ;;
+                        backup) backup_game "$2" ;;
+                        restore) restore_game "$2" "$3" ;;
+                        config) manage_config "$2" ;;
+                        *)
+                            print_error "Unknown command: $1"
+                            print_info "Run 'browser-games help' for available commands"
+                            ;;
+                    esac
+                else
+                    start_shell
+                fi
+                ;;
+        esac
+    fi
+}
+
+# Run main function
+main "$@"
